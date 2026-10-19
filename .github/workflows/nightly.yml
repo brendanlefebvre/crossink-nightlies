@@ -1,0 +1,267 @@
+name: Nightly firmware
+
+on:
+  schedule:
+    # 06:23 UTC daily. The build is skipped when upstream development has not moved.
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if upstream development has not changed since the last nightly"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: uxjulia/CrossInk
+  UPSTREAM_BRANCH: development
+  RETENTION_DAYS: "30"
+
+jobs:
+  resolve:
+    name: Resolve upstream head
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      sha: ${{ steps.upstream.outputs.sha }}
+      short: ${{ steps.upstream.outputs.short }}
+      date: ${{ steps.upstream.outputs.date }}
+      tag: ${{ steps.tag.outputs.tag }}
+      previous_sha: ${{ steps.previous.outputs.sha }}
+      previous_tag: ${{ steps.previous.outputs.tag }}
+    steps:
+      - name: Resolve upstream development head
+        id: upstream
+        run: |
+          set -euo pipefail
+          sha=$(git ls-remote "https://github.com/${UPSTREAM_REPO}.git" "refs/heads/${UPSTREAM_BRANCH}" | cut -f1)
+          if [ -z "$sha" ]; then
+            echo "Could not resolve ${UPSTREAM_REPO} ${UPSTREAM_BRANCH}" >&2
+            exit 1
+          fi
+          {
+            echo "sha=$sha"
+            echo "short=${sha::7}"
+            echo "date=$(date -u +%F)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Find the previous nightly
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.createdAt) | last | .tagName // empty')
+          sha=""
+          if [ -n "$tag" ]; then
+            # The release notes end with a hidden marker naming the upstream commit they were built from.
+            sha=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' \
+              | sed -n 's/.*<!-- source-sha:\([0-9a-f]\{40\}\) -->.*/\1/p' | head -n 1)
+          fi
+          {
+            echo "tag=$tag"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          FORCE: ${{ inputs.force }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$FORCE" = "true" ]; then
+            build=true
+          elif [ -n "$PREVIOUS_SHA" ] && [ "$PREVIOUS_SHA" = "$UPSTREAM_SHA" ]; then
+            build=false
+          else
+            build=true
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "upstream=$UPSTREAM_SHA previous=${PREVIOUS_TAG:-none}@${PREVIOUS_SHA:-n/a} build=$build"
+
+      - name: Pick a free release tag
+        id: tag
+        if: steps.decide.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_TAG: nightly-${{ steps.upstream.outputs.date }}-${{ steps.upstream.outputs.short }}
+        run: |
+          set -euo pipefail
+          tag="$BASE_TAG"
+          # A forced rebuild of the same commit on the same day gets a suffix instead of a collision.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            tag="${BASE_TAG}.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.environment }}
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: default
+            firmware: firmware-x3-x4
+          - environment: sticky
+            firmware: firmware-sticky
+          - environment: x4-pro
+            firmware: firmware-x4-pro
+          - environment: x4-classic
+            firmware: firmware-x4-classic
+    steps:
+      - name: Check out upstream CrossInk
+        uses: actions/checkout@v6
+        with:
+          repository: uxjulia/CrossInk
+          ref: ${{ needs.resolve.outputs.sha }}
+          submodules: recursive
+
+      - name: Name the checkout like a local development build
+        # scripts/git_branch.py puts the branch name into the on-device version string;
+        # a detached checkout would read "dev+detached".
+        run: git checkout -B "$UPSTREAM_BRANCH"
+
+      # The toolchain steps below mirror upstream's .github/workflows/ci.yml. Re-sync them
+      # when upstream changes its Python, uv, or pioarduino core pins.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          # Do not cache PlatformIO's Python virtual environment. It is tied to
+          # the runner's Python and can become invalid when restored elsewhere.
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-platformio-py3.14-core6.1.19-${{ matrix.environment }}-${{ hashFiles('platformio.ini', 'platformio.local.example.ini') }}
+
+      - name: Install PlatformIO Core
+        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+
+      - name: Build ${{ matrix.environment }} firmware
+        run: |
+          set -euo pipefail
+          pio run -j1 -e ${{ matrix.environment }} | tee pio-${{ matrix.environment }}.log
+          {
+            echo "## ${{ matrix.environment }} firmware build stats"
+            grep -E "RAM:\s|Flash:\s" pio-${{ matrix.environment }}.log | while read -r line; do echo "- ${line}"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Name the firmware for this nightly
+        env:
+          SRC: .pio/build/${{ matrix.environment }}/${{ matrix.firmware }}.bin
+          DST: firmware/${{ matrix.firmware }}-${{ needs.resolve.outputs.tag }}.bin
+        run: |
+          set -euo pipefail
+          test -f "$SRC"
+          mkdir -p firmware
+          cp "$SRC" "$DST"
+          ls -l firmware
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-${{ matrix.environment }}
+          path: firmware/*.bin
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [resolve, build]
+    # Publish whatever built; the notes name any board whose build failed.
+    if: always() && needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+      SHORT: ${{ needs.resolve.outputs.short }}
+      DATE: ${{ needs.resolve.outputs.date }}
+      PREVIOUS_SHA: ${{ needs.resolve.outputs.previous_sha }}
+      PREVIOUS_TAG: ${{ needs.resolve.outputs.previous_tag }}
+    steps:
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: nightly-*
+          merge-multiple: true
+          path: firmware
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          mkdir -p firmware
+          count=$(find firmware -name '*.bin' | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "No firmware was built; nothing to publish" >&2
+            exit 1
+          fi
+          {
+            echo "Untested automated build of [${UPSTREAM_REPO}](https://github.com/${UPSTREAM_REPO}) \`${UPSTREAM_BRANCH}\` at [\`${SHORT}\`](https://github.com/${UPSTREAM_REPO}/commit/${SHA})."
+            echo
+            echo "Nobody has flashed this on any device. Flash at your own risk, keep a copy of a release you trust, and report problems in this repository rather than upstream unless you can reproduce them on an official build."
+            echo
+            echo "### Firmware"
+            echo
+            for pair in "firmware-x3-x4:Xteink X3 and X4" "firmware-sticky:Seeed Sticky" "firmware-x4-pro:Xteink X4 Pro" "firmware-x4-classic:Xteink X4 Classic"; do
+              prefix="${pair%%:*}"
+              board="${pair#*:}"
+              file="firmware/${prefix}-${TAG}.bin"
+              if [ -f "$file" ]; then
+                echo "- ${board}: \`${prefix}-${TAG}.bin\`"
+              else
+                echo "- ${board}: **build failed, no file in this nightly**"
+              fi
+            done
+            echo
+            if [ -n "$PREVIOUS_SHA" ] && [ "$PREVIOUS_SHA" != "$SHA" ]; then
+              echo "### Upstream changes since ${PREVIOUS_TAG}"
+              echo
+              if gh api "repos/${UPSTREAM_REPO}/compare/${PREVIOUS_SHA}...${SHA}" --paginate \
+                   --jq '.commits[] | "- " + .sha[0:7] + " " + (.commit.message | split("\n")[0])' > commits.txt 2>/dev/null \
+                 && [ -s commits.txt ]; then
+                cat commits.txt
+              else
+                echo "- (commit list unavailable; compare ${PREVIOUS_SHA::7}...${SHORT} upstream)"
+              fi
+              echo
+            fi
+            echo "<!-- source-sha:${SHA} -->"
+          } > notes.md
+          cat notes.md
+
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Nightly ${DATE} (${SHORT})" --notes-file notes.md firmware/*.bin
+
+      - name: Remove nightlies older than the retention window
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%s)
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
+            --jq '.[] | select(.tagName | startswith("nightly-")) | "\(.tagName) \(.createdAt)"' \
+          | while read -r tag created; do
+              if [ "$(date -u -d "$created" +%s)" -lt "$cutoff" ]; then
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+                echo "Removed $tag (created $created)"
+              fi
+            done
