@@ -2,8 +2,8 @@ name: Nightly firmware
 
 on:
   schedule:
-    # 06:23 UTC daily. The build is skipped when upstream development has not moved.
-    - cron: "23 6 * * *"
+    # TEMPORARY: every 20 minutes to confirm the schedule registers on this new repo.
+    - cron: "*/20 * * * *"
   workflow_dispatch:
     inputs:
       force:
