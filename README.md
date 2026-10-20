@@ -20,7 +20,7 @@ Flashing instructions are in the [CrossInk user guide](https://github.com/uxjuli
 - Built from upstream `development` exactly as it is, no local patches, in the same plain configuration upstream uses for its release candidates.
 - Nobody has flashed these on any device before they are published. Expect rough edges, and keep a copy of a release you trust.
 - The on-device version reads like a local development build (for example `1.6.1-dev+development`). The exact upstream commit is in the file name and in the release notes.
-- A nightly is only published when `development` has moved since the previous one. Releases older than 30 days are removed automatically.
+- The check runs daily at 06:23 UTC (02:23 US Eastern). A nightly is only published when `development` has moved since the previous one. Releases older than 30 days are removed automatically.
 - If one board fails to build, the others are still published and the release notes say which file is missing.
 
 This project is not affiliated with the CrossInk maintainers. Please report problems with a nightly here, not upstream, unless you can reproduce them on an official release or release candidate.
