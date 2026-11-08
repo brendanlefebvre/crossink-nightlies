@@ -53,8 +53,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.createdAt) | last | .tagName // empty')
+          # Order by publishedAt: GitHub's createdAt is the date of the commit a release targets,
+          # which is the same for every nightly, so it cannot tell them apart.
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,publishedAt \
+            --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.publishedAt) | last | .tagName // empty')
           sha=""
           if [ -n "$tag" ]; then
             # The release notes end with a hidden marker naming the upstream commit they were built from.
@@ -261,11 +263,12 @@ jobs:
         run: |
           set -euo pipefail
           cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%s)
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,createdAt \
-            --jq '.[] | select(.tagName | startswith("nightly-")) | "\(.tagName) \(.createdAt)"' \
-          | while read -r tag created; do
-              if [ "$(date -u -d "$created" +%s)" -lt "$cutoff" ]; then
+          # Age by publishedAt too; createdAt would expire every nightly on the same day.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,publishedAt \
+            --jq '.[] | select(.tagName | startswith("nightly-")) | "\(.tagName) \(.publishedAt)"' \
+          | while read -r tag published; do
+              if [ "$(date -u -d "$published" +%s)" -lt "$cutoff" ]; then
                 gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-                echo "Removed $tag (created $created)"
+                echo "Removed $tag (published $published)"
               fi
             done
