@@ -12,8 +12,11 @@ Each release is one nightly. It lists one firmware file per supported board, so 
 | `firmware-sticky-nightly-<date>-<commit>.bin` | Seeed Sticky |
 | `firmware-x4-pro-nightly-<date>-<commit>.bin` | Xteink X4 Pro |
 | `firmware-x4-classic-nightly-<date>-<commit>.bin` | Xteink X4 Classic |
+| `firmware-picco-nightly-<date>-<commit>.bin` | BOOX Picco |
 
 Flashing instructions are in the [CrossInk user guide](https://github.com/uxjulia/CrossInk/blob/development/docs/user-guide.md).
+
+BOOX Picco is different from the Xteink boards: its file is an app-only image for the stock application slot, and it must be installed with a USB installer that explicitly supports the Picco. Never erase the device or flash an X4 Pro build on it. CrossInk hides its Wi-Fi and SD-card update options on the Picco, so nightlies go on the same way as any other install. See the [Picco guide](https://github.com/uxjulia/CrossInk/blob/development/docs/picco.md).
 
 ## What you are getting
 
@@ -27,6 +30,6 @@ This project is not affiliated with the CrossInk maintainers. Please report prob
 
 ## How it works
 
-[`.github/workflows/nightly.yml`](.github/workflows/nightly.yml) runs on a daily schedule and on demand. It resolves the current head of upstream `development`, compares it with the commit recorded in the latest nightly, and if they differ it checks out upstream at that commit, builds the four board environments with the same pinned toolchain as upstream's own CI, and publishes a pre-release with the firmware files and the list of upstream commits since the previous nightly.
+[`.github/workflows/nightly.yml`](.github/workflows/nightly.yml) runs on a daily schedule and on demand. It resolves the current head of upstream `development`, compares it with the commit recorded in the latest nightly, and if they differ it checks out upstream at that commit, builds the five board environments with the same pinned toolchain as upstream's own CI, and publishes a pre-release with the firmware files and the list of upstream commits since the previous nightly.
 
 Nothing is pushed to this repository by the workflow except release tags.

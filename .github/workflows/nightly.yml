@@ -117,6 +117,8 @@ jobs:
             firmware: firmware-x4-pro
           - environment: x4-classic
             firmware: firmware-x4-classic
+          - environment: picco
+            firmware: firmware-picco
     steps:
       - name: Check out upstream CrossInk
         uses: actions/checkout@v6
@@ -218,9 +220,11 @@ jobs:
             echo
             echo "Nobody has flashed this on any device. Flash at your own risk, keep a copy of a release you trust, and report problems in this repository rather than upstream unless you can reproduce them on an official build."
             echo
+            echo "BOOX Picco: install the file with a Picco-aware USB installer only. It is an app-only image for the stock application slot; never erase the device or use an X4 Pro build on it. Wi-Fi and SD-card updates are unavailable on Picco."
+            echo
             echo "### Firmware"
             echo
-            for pair in "firmware-x3-x4:Xteink X3 and X4" "firmware-sticky:Seeed Sticky" "firmware-x4-pro:Xteink X4 Pro" "firmware-x4-classic:Xteink X4 Classic"; do
+            for pair in "firmware-x3-x4:Xteink X3 and X4" "firmware-sticky:Seeed Sticky" "firmware-x4-pro:Xteink X4 Pro" "firmware-x4-classic:Xteink X4 Classic" "firmware-picco:BOOX Picco"; do
               prefix="${pair%%:*}"
               board="${pair#*:}"
               file="firmware/${prefix}-${TAG}.bin"
