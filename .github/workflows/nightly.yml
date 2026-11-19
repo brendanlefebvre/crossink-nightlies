@@ -134,7 +134,7 @@ jobs:
         # a detached checkout would read "dev+detached".
         run: git checkout -B "$UPSTREAM_BRANCH"
 
-      # The toolchain steps below mirror upstream's .github/workflows/ci.yml. Re-sync them
+      # The toolchain steps below mirror upstream's .github/workflows/release_candidate.yml. Re-sync them
       # when upstream changes its Python, uv, or pioarduino core pins.
       - uses: actions/setup-python@v6
         with:
@@ -154,10 +154,19 @@ jobs:
           path: |
             ~/.platformio/packages
             ~/.platformio/platforms
-          key: ${{ runner.os }}-platformio-py3.14-core6.1.19-${{ matrix.environment }}-${{ hashFiles('platformio.ini', 'platformio.local.example.ini') }}
+          key: ${{ runner.os }}-platformio-py3.14-core6.1.19-penv-v2-${{ matrix.environment }}-${{ hashFiles('platformio.ini', 'platformio.local.example.ini') }}
 
+      # Mirrors upstream's release_candidate.yml (dd04892), not ci.yml: ci.yml's system-wide
+      # install breaks the second build pass of the custom_sdkconfig envs (default, sticky).
       - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+        run: |
+          # The ESP platform invokes pio from this penv for its second pass.
+          # Pin the package name it checks, so it cannot install a newer Core
+          # and replace SCons while a build is already running.
+          uv venv --python "$pythonLocation/bin/python" "$HOME/.platformio/penv"
+          uv pip install --python "$HOME/.platformio/penv/bin/python" "pioarduino==6.1.19"
+          echo "$HOME/.platformio/penv/bin" >> "$GITHUB_PATH"
+          "$HOME/.platformio/penv/bin/pio" --version
 
       - name: Build ${{ matrix.environment }} firmware
         run: |
